@@ -229,12 +229,12 @@ function CommentsSection({ animeId, episodeId }) {
             <div 
               className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold border-2 border-gray-600 flex-shrink-0"
               style={{
-                background: user.avatar 
+                background: user?.avatar 
                   ? `url(${user.avatar}) center/cover`
-                  : getAvatarBackgroundColor(user.username),
+                  : getAvatarBackgroundColor(user?.username),
               }}
             >
-              {!user.avatar && getAvatarInitials(user.username)}
+              {!user?.avatar && getAvatarInitials(user?.username)}
             </div>
             <div className="flex-1">
               <input
@@ -247,7 +247,7 @@ function CommentsSection({ animeId, episodeId }) {
               />
               <div className="flex justify-between items-center mt-2">
                 <span className="text-gray-400 text-xs">
-                  Commenting as <span className="text-blue-400">{user.username}</span>
+                  Commenting as <span className="text-blue-400">{user?.username}</span>
                   {isAdmin && <span className="text-red-400 ml-1">(Admin)</span>}
                 </span>
                 <button
@@ -421,9 +421,9 @@ function ChatSection({ animeId, episodeId }) {
         episodeId,
         text: newMessage,
         image: imagePreview,
-        userId: user.id,
-        username: user.username,
-        avatar: user.avatar,
+        userId: user?.id,
+        username: user?.username,
+        avatar: user?.avatar,
         timestamp: new Date().toISOString()
       };
 
