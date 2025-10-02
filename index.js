@@ -6,9 +6,23 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 
+// Get allowed origins from environment or use defaults
+const allowedOrigins = process.env.CLIENT_URL 
+  ? process.env.CLIENT_URL.split(',') 
+  : ["http://localhost:3000", "https://your-anime-site.vercel.app"];
+
 // Middleware
 app.use(cors({
-  origin: process.env.CLIENT_URL || "http://localhost:3000",
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
   credentials: true
 }));
 app.use(express.json());
@@ -16,9 +30,11 @@ app.use(express.json());
 // Socket.IO setup
 const io = socketIO(server, {
   cors: {
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
-    methods: ["GET", "POST"]
-  }
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['websocket', 'polling'] // Important for Vercel
 });
 
 // Store chat messages in memory (use Redis in production)
@@ -30,12 +46,11 @@ io.on('connection', (socket) => {
   // When someone adds a comment (broadcast to other users)
   socket.on('new_comment', (comment) => {
     try {
-      const room = `comments:${comment.animeId}:${comment.episodeId}`;
       console.log('💬 Broadcasting new comment to other users:', comment);
       
       // Broadcast to everyone EXCEPT the sender
       socket.broadcast.emit('new_comment', comment);
-      console.log(`📤 Broadcasted comment to other users in room ${room}`);
+      console.log(`📤 Broadcasted comment to other users`);
 
     } catch (error) {
       console.error('❌ Error broadcasting new comment:', error);
@@ -44,14 +59,13 @@ io.on('connection', (socket) => {
   });
 
   // When someone deletes a comment (broadcast to other users)
-  socket.on('comment_deleted', ({ commentId, animeId, episodeId }) => {
+  socket.on('comment_deleted', (data) => {
     try {
-      const room = `comments:${animeId}:${episodeId}`;
-      console.log(`🗑️ Broadcasting deleted comment to other users:`, commentId);
+      console.log(`🗑️ Broadcasting deleted comment to other users:`, data);
       
       // Broadcast to everyone EXCEPT the sender
-      socket.broadcast.emit('comment_deleted', commentId);
-      console.log(`📤 Broadcasted comment deletion to other users in room ${room}`);
+      socket.broadcast.emit('comment_deleted', data);
+      console.log(`📤 Broadcasted comment deletion to other users`);
 
     } catch (error) {
       console.error('❌ Error broadcasting deleted comment:', error);
@@ -166,7 +180,7 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     connectedClients: io.engine.clientsCount,
     activeChatRooms: chatMessages.size,
-    memoryUsage: process.memoryUsage()
+    uptime: process.uptime()
   };
   
   console.log('🏥 Health check:', healthData);
@@ -200,35 +214,6 @@ const PORT = process.env.PORT || 3001;
 
 server.listen(PORT, () => {
   console.log(`🚀 Socket.IO server running on port ${PORT}`);
-  console.log(`🌐 CORS enabled for: ${process.env.CLIENT_URL || 'http://localhost:3000'}`);
+  console.log(`🌐 Allowed origins:`, allowedOrigins);
   console.log(`🏥 Health check available at: http://localhost:${PORT}/health`);
-  console.log(`📊 Stats available at: http://localhost:${PORT}/stats`);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('🛑 SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('🛑 SIGINT received, shutting down gracefully');
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('💥 Uncaught Exception:', error);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
 });
