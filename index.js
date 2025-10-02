@@ -24,109 +24,38 @@ const io = socketIO(server, {
 // Store chat messages in memory (use Redis in production)
 const chatMessages = new Map();
 
-// Store comments in memory (like chat messages)
-const commentsData = new Map();
-
 io.on('connection', (socket) => {
   console.log('✅ User connected:', socket.id);
 
-  // When someone joins a comments room
-  socket.on('join_comments', ({ animeId, episodeId }) => {
-    const room = `comments:${animeId}:${episodeId}`;
-    
+  // When someone adds a comment (broadcast to other users)
+  socket.on('new_comment', (comment) => {
     try {
-      socket.join(room);
-      console.log(`💬 User ${socket.id} joined comments ${room}`);
-
-      // Initialize comments room if it doesn't exist
-      if (!commentsData.has(room)) {
-        commentsData.set(room, []);
-      }
-
-      const comments = commentsData.get(room);
+      const room = `comments:${comment.animeId}:${comment.episodeId}`;
+      console.log('💬 Broadcasting new comment to other users:', comment);
       
-      // Send current comments to the user
-      socket.emit('comments_history', comments);
-      console.log(`📤 Sent ${comments.length} comments to user ${socket.id}`);
+      // Broadcast to everyone EXCEPT the sender
+      socket.broadcast.emit('new_comment', comment);
+      console.log(`📤 Broadcasted comment to other users in room ${room}`);
 
     } catch (error) {
-      console.error('❌ Error joining comments room:', error);
-      socket.emit('error', { message: 'Failed to join comments room' });
+      console.error('❌ Error broadcasting new comment:', error);
+      socket.emit('error', { message: 'Failed to broadcast comment' });
     }
   });
 
-  // When someone adds a comment
-  socket.on('new_comment', (commentData) => {
-    try {
-      const room = `comments:${commentData.animeId}:${commentData.episodeId}`;
-      console.log(`💬 New comment in ${room}:`, commentData);
-
-      // Add comment to comments data
-      if (!commentsData.has(room)) {
-        commentsData.set(room, []);
-      }
-
-      const comments = commentsData.get(room);
-      
-      // Add unique ID if not present
-      if (!commentData.id) {
-        commentData.id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-      }
-      
-      // Add timestamp if not present
-      if (!commentData.createdAt) {
-        commentData.createdAt = new Date().toISOString();
-      }
-
-      comments.push(commentData);
-      
-      // Keep only last 100 comments to prevent memory issues
-      if (comments.length > 100) {
-        commentsData.set(room, comments.slice(-100));
-      }
-
-      // Broadcast to everyone in the room including the sender
-      io.to(room).emit('new_comment', commentData);
-      console.log(`📤 Broadcasted comment to room ${room}`);
-
-    } catch (error) {
-      console.error('❌ Error handling new comment:', error);
-      socket.emit('error', { message: 'Failed to add comment' });
-    }
-  });
-
-  // When someone deletes a comment
+  // When someone deletes a comment (broadcast to other users)
   socket.on('comment_deleted', ({ commentId, animeId, episodeId }) => {
     try {
       const room = `comments:${animeId}:${episodeId}`;
-      console.log(`🗑️ Deleting comment ${commentId} from ${room}`);
-
-      if (commentsData.has(room)) {
-        const comments = commentsData.get(room);
-        const updatedComments = comments.filter(comment => comment.id !== commentId);
-        commentsData.set(room, updatedComments);
-
-        // Broadcast to everyone in the room
-        io.to(room).emit('comment_deleted', commentId);
-        console.log(`📤 Broadcasted comment deletion to room ${room}`);
-      }
+      console.log(`🗑️ Broadcasting deleted comment to other users:`, commentId);
+      
+      // Broadcast to everyone EXCEPT the sender
+      socket.broadcast.emit('comment_deleted', commentId);
+      console.log(`📤 Broadcasted comment deletion to other users in room ${room}`);
 
     } catch (error) {
-      console.error('❌ Error deleting comment:', error);
-      socket.emit('error', { message: 'Failed to delete comment' });
-    }
-  });
-
-  // Leave comments room
-  socket.on('leave_comments', ({ animeId, episodeId }) => {
-    const room = `comments:${animeId}:${episodeId}`;
-    
-    try {
-      socket.leave(room);
-      console.log(`👋 User ${socket.id} left comments ${room}`);
-
-    } catch (error) {
-      console.error('❌ Error leaving comments room:', error);
+      console.error('❌ Error broadcasting deleted comment:', error);
+      socket.emit('error', { message: 'Failed to broadcast comment deletion' });
     }
   });
 
@@ -222,8 +151,6 @@ io.on('connection', (socket) => {
   // Handle disconnection
   socket.on('disconnect', (reason) => {
     console.log(`❌ User disconnected: ${socket.id} (${reason})`);
-    
-    // No need to clean up comments rooms as they're shared between users
   });
 
   // Error handling
@@ -238,7 +165,6 @@ app.get('/health', (req, res) => {
     status: 'OK',
     timestamp: new Date().toISOString(),
     connectedClients: io.engine.clientsCount,
-    activeCommentsRooms: commentsData.size,
     activeChatRooms: chatMessages.size,
     memoryUsage: process.memoryUsage()
   };
@@ -250,10 +176,6 @@ app.get('/health', (req, res) => {
 // Get server statistics
 app.get('/stats', (req, res) => {
   const stats = {
-    commentsRooms: Array.from(commentsData.entries()).map(([room, comments]) => ({
-      room,
-      commentCount: comments.length
-    })),
     chatRooms: Array.from(chatMessages.entries()).map(([room, messages]) => ({
       room,
       messageCount: messages.length
