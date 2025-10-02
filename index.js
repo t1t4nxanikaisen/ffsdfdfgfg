@@ -12,7 +12,7 @@ const allowedOrigins = process.env.CLIENT_URL
   : [
       "http://localhost:3000", 
       "https://anime-website.vercel.app",
-      "https://*.vercel.app"
+      "https://ffsdfdfgfg.vercel.app"
     ];
 
 // Middleware
