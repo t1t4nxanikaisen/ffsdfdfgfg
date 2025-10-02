@@ -1,7 +1,7 @@
-const express = require('express');
-const http = require('http');
-const socketIO = require('socket.io');
-const cors = require('cors');
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
 
 const app = express();
 const server = http.createServer(app);
@@ -14,7 +14,7 @@ app.use(cors({
 app.use(express.json());
 
 // Socket.IO setup
-const io = socketIO(server, {
+const io = new Server(server, {
     cors: {
         origin: "*",
         methods: ["GET", "POST"]
@@ -23,8 +23,8 @@ const io = socketIO(server, {
 });
 
 // In-memory storage (use database in production)
-const comments = new Map(); // Format: { "animeId-episodeId": [comment1, comment2, ...] }
-const chatMessages = new Map(); // Format: { "chat:animeId:episodeId": [message1, message2, ...] }
+const comments = new Map();
+const chatMessages = new Map();
 
 // =======================
 // REST API ENDPOINTS
@@ -46,14 +46,7 @@ app.get('/', (req, res) => {
             },
             chat: {
                 history: 'GET /api/chat/:animeId/:episodeId'
-            },
-            socket_events: [
-                'join_comments',
-                'new_comment', 
-                'delete_comment',
-                'join_chat',
-                'send_message'
-            ]
+            }
         }
     });
 });
@@ -118,7 +111,6 @@ app.post('/api/comments/:animeId/:episodeId', (req, res) => {
     const { animeId, episodeId } = req.params;
     const { comment, user_id, username, avatar, is_admin } = req.body;
     
-    // Validation
     if (!comment || !user_id || !username) {
         return res.status(400).json({
             success: false,
@@ -137,14 +129,12 @@ app.post('/api/comments/:animeId/:episodeId', (req, res) => {
     try {
         const roomKey = `${animeId}-${episodeId}`;
         
-        // Initialize room if it doesn't exist
         if (!comments.has(roomKey)) {
             comments.set(roomKey, []);
         }
         
-        // Create new comment with proper ID
         const newComment = {
-            id: generateCommentId(), // Fixed ID generation
+            id: generateCommentId(),
             comment: comment.trim(),
             user_id: user_id,
             username: username,
@@ -158,12 +148,10 @@ app.post('/api/comments/:animeId/:episodeId', (req, res) => {
         const roomComments = comments.get(roomKey);
         roomComments.push(newComment);
         
-        // Keep only last 200 comments per room to prevent memory issues
         if (roomComments.length > 200) {
             comments.set(roomKey, roomComments.slice(-200));
         }
         
-        // Broadcast to all connected clients in this room
         io.to(roomKey).emit('new_comment', newComment);
         
         console.log(`💬 New comment in ${roomKey} from ${username}`);
@@ -220,7 +208,6 @@ app.delete('/api/comments/:animeId/:episodeId/:commentId', (req, res) => {
         
         const comment = roomComments[commentIndex];
         
-        // Check if user has permission to delete (either admin or comment owner)
         if (!is_admin && comment.user_id !== user_id) {
             return res.status(403).json({
                 success: false,
@@ -228,10 +215,8 @@ app.delete('/api/comments/:animeId/:episodeId/:commentId', (req, res) => {
             });
         }
         
-        // Remove the comment
         const deletedComment = roomComments.splice(commentIndex, 1)[0];
         
-        // Broadcast deletion to all connected clients
         io.to(roomKey).emit('comment_deleted', {
             comment_id: commentId,
             anime_id: animeId,
@@ -258,7 +243,7 @@ app.delete('/api/comments/:animeId/:episodeId/:commentId', (req, res) => {
     }
 });
 
-// Get chat history for specific anime episode
+// Get chat history
 app.get('/api/chat/:animeId/:episodeId', (req, res) => {
     const { animeId, episodeId } = req.params;
     const roomKey = `chat:${animeId}:${episodeId}`;
@@ -292,18 +277,15 @@ app.get('/api/chat/:animeId/:episodeId', (req, res) => {
 io.on('connection', (socket) => {
     console.log('✅ User connected:', socket.id);
 
-    // Join comment room for specific anime episode
     socket.on('join_comments', ({ animeId, episodeId }) => {
         const roomKey = `${animeId}-${episodeId}`;
         socket.join(roomKey);
         console.log(`💬 User ${socket.id} joined comments room: ${roomKey}`);
         
-        // Initialize room if it doesn't exist
         if (!comments.has(roomKey)) {
             comments.set(roomKey, []);
         }
         
-        // Send current comments to the joining user
         const roomComments = comments.get(roomKey);
         socket.emit('comments_history', {
             anime_id: animeId,
@@ -312,12 +294,10 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Add new comment via socket
     socket.on('new_comment', (commentData) => {
         try {
             const { animeId, episodeId, comment, user_id, username, avatar, is_admin } = commentData;
             
-            // Validation
             if (!animeId || !episodeId || !comment || !user_id || !username) {
                 socket.emit('error', { 
                     message: 'Missing required fields',
@@ -333,12 +313,10 @@ io.on('connection', (socket) => {
             
             const roomKey = `${animeId}-${episodeId}`;
             
-            // Initialize room if it doesn't exist
             if (!comments.has(roomKey)) {
                 comments.set(roomKey, []);
             }
             
-            // Create new comment with proper ID
             const newComment = {
                 id: generateCommentId(),
                 comment: comment.trim(),
@@ -354,14 +332,12 @@ io.on('connection', (socket) => {
             const roomComments = comments.get(roomKey);
             roomComments.push(newComment);
             
-            // Keep only last 200 comments per room
             if (roomComments.length > 200) {
                 comments.set(roomKey, roomComments.slice(-200));
             }
             
             console.log(`💬 New comment in ${roomKey} from ${username}`);
             
-            // Broadcast to everyone in the room including the sender
             io.to(roomKey).emit('new_comment', newComment);
             
         } catch (error) {
@@ -373,7 +349,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Delete comment via socket
     socket.on('delete_comment', (data) => {
         try {
             const { comment_id, anime_id, episode_id, user_id, is_admin } = data;
@@ -402,18 +377,15 @@ io.on('connection', (socket) => {
             
             const comment = roomComments[commentIndex];
             
-            // Check permissions
             if (!is_admin && comment.user_id !== user_id) {
                 socket.emit('error', { message: 'Permission denied' });
                 return;
             }
             
-            // Remove the comment
             roomComments.splice(commentIndex, 1);
             
             console.log(`🗑️ Comment deleted from ${roomKey}: ${comment_id}`);
             
-            // Broadcast deletion to everyone in the room
             io.to(roomKey).emit('comment_deleted', {
                 comment_id: comment_id,
                 anime_id: anime_id,
@@ -430,7 +402,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Chat room functionality
     socket.on('join_chat', ({ animeId, episodeId }) => {
         const roomKey = `chat:${animeId}:${episodeId}`;
         socket.join(roomKey);
@@ -453,18 +424,16 @@ io.on('connection', (socket) => {
             const messages = chatMessages.get(roomKey);
             const messageWithId = {
                 ...messageData,
-                id: generateCommentId(), // Reuse the same ID generator
+                id: generateCommentId(),
                 timestamp: new Date().toISOString()
             };
 
             messages.push(messageWithId);
             
-            // Keep only last 100 messages
             if (messages.length > 100) {
                 chatMessages.set(roomKey, messages.slice(-100));
             }
 
-            // Broadcast to everyone in the room including the sender
             io.to(roomKey).emit('new_message', messageWithId);
             console.log(`📤 Chat message sent to ${roomKey} from ${username}`);
 
@@ -477,7 +446,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Get chat history via socket
     socket.on('get_chat_history', ({ animeId, episodeId }, callback) => {
         try {
             const roomKey = `chat:${animeId}:${episodeId}`;
@@ -502,7 +470,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Get comments history via socket
     socket.on('get_comments_history', ({ animeId, episodeId }, callback) => {
         try {
             const roomKey = `${animeId}-${episodeId}`;
@@ -527,7 +494,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Leave rooms
     socket.on('leave_comments', ({ animeId, episodeId }) => {
         const roomKey = `${animeId}-${episodeId}`;
         socket.leave(roomKey);
@@ -540,12 +506,10 @@ io.on('connection', (socket) => {
         console.log(`👋 User ${socket.id} left chat room: ${roomKey}`);
     });
 
-    // Handle disconnection
     socket.on('disconnect', (reason) => {
         console.log(`❌ User disconnected: ${socket.id} (${reason})`);
     });
 
-    // Error handling
     socket.on('error', (error) => {
         console.error('🔴 Socket error:', error);
     });
@@ -555,7 +519,6 @@ io.on('connection', (socket) => {
 // UTILITY FUNCTIONS
 // =======================
 
-// Fixed ID generation function
 function generateCommentId() {
     return `comment_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
@@ -564,7 +527,6 @@ function generateCommentId() {
 // ERROR HANDLING
 // =======================
 
-// Handle 404
 app.use('*', (req, res) => {
     res.status(404).json({ 
         success: false,
@@ -583,7 +545,6 @@ app.use('*', (req, res) => {
     });
 });
 
-// Global error handler
 app.use((error, req, res, next) => {
     console.error('🔴 Server error:', error);
     res.status(500).json({ 
@@ -613,7 +574,6 @@ server.listen(PORT, () => {
     `);
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
     console.log('🛑 SIGTERM received, shutting down gracefully');
     server.close(() => {
