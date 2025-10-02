@@ -24,76 +24,70 @@ const io = socketIO(server, {
 // Store chat messages in memory (use Redis in production)
 const chatMessages = new Map();
 
-// Store active episode rooms and their comments
-const episodeRooms = new Map();
+// Store comments in memory (like chat messages)
+const commentsData = new Map();
 
 io.on('connection', (socket) => {
   console.log('✅ User connected:', socket.id);
 
-  // When someone joins an episode room for comments
-  socket.on('join_episode', async ({ animeId, episodeId }) => {
-    const room = `episode:${animeId}:${episodeId}`;
+  // When someone joins a comments room
+  socket.on('join_comments', ({ animeId, episodeId }) => {
+    const room = `comments:${animeId}:${episodeId}`;
     
     try {
       socket.join(room);
-      console.log(`📨 User ${socket.id} joined ${room}`);
+      console.log(`💬 User ${socket.id} joined comments ${room}`);
 
-      // Initialize room if it doesn't exist
-      if (!episodeRooms.has(room)) {
-        episodeRooms.set(room, {
-          animeId,
-          episodeId,
-          comments: [],
-          users: new Set()
-        });
+      // Initialize comments room if it doesn't exist
+      if (!commentsData.has(room)) {
+        commentsData.set(room, []);
       }
 
-      const roomData = episodeRooms.get(room);
-      roomData.users.add(socket.id);
-
+      const comments = commentsData.get(room);
+      
       // Send current comments to the user
-      socket.emit('comments_updated', roomData.comments);
-      console.log(`📤 Sent ${roomData.comments.length} comments to user ${socket.id}`);
+      socket.emit('comments_history', comments);
+      console.log(`📤 Sent ${comments.length} comments to user ${socket.id}`);
 
     } catch (error) {
-      console.error('❌ Error joining episode room:', error);
-      socket.emit('error', { message: 'Failed to join episode room' });
+      console.error('❌ Error joining comments room:', error);
+      socket.emit('error', { message: 'Failed to join comments room' });
     }
   });
 
   // When someone adds a comment
-  socket.on('new_comment', (comment) => {
+  socket.on('new_comment', (commentData) => {
     try {
-      const room = `episode:${comment.animeId}:${comment.episodeId}`;
-      console.log(`💬 New comment in ${room}:`, comment);
+      const room = `comments:${commentData.animeId}:${commentData.episodeId}`;
+      console.log(`💬 New comment in ${room}:`, commentData);
 
-      // Add comment to room data
-      if (episodeRooms.has(room)) {
-        const roomData = episodeRooms.get(room);
-        
-        // Add unique ID if not present
-        if (!comment.id) {
-          comment.id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-        }
-        
-        // Add timestamp if not present
-        if (!comment.createdAt) {
-          comment.createdAt = new Date().toISOString();
-        }
-
-        roomData.comments.push(comment);
-        
-        // Keep only last 100 comments to prevent memory issues
-        if (roomData.comments.length > 100) {
-          roomData.comments = roomData.comments.slice(-100);
-        }
-
-        // Broadcast to everyone in the room including the sender
-        io.to(room).emit('new_comment', comment);
-        console.log(`📤 Broadcasted comment to ${roomData.users.size} users in ${room}`);
-      } else {
-        console.warn(`⚠️ Room ${room} not found for new comment`);
+      // Add comment to comments data
+      if (!commentsData.has(room)) {
+        commentsData.set(room, []);
       }
+
+      const comments = commentsData.get(room);
+      
+      // Add unique ID if not present
+      if (!commentData.id) {
+        commentData.id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      }
+      
+      // Add timestamp if not present
+      if (!commentData.createdAt) {
+        commentData.createdAt = new Date().toISOString();
+      }
+
+      comments.push(commentData);
+      
+      // Keep only last 100 comments to prevent memory issues
+      if (comments.length > 100) {
+        commentsData.set(room, comments.slice(-100));
+      }
+
+      // Broadcast to everyone in the room including the sender
+      io.to(room).emit('new_comment', commentData);
+      console.log(`📤 Broadcasted comment to room ${room}`);
 
     } catch (error) {
       console.error('❌ Error handling new comment:', error);
@@ -104,21 +98,35 @@ io.on('connection', (socket) => {
   // When someone deletes a comment
   socket.on('comment_deleted', ({ commentId, animeId, episodeId }) => {
     try {
-      const room = `episode:${animeId}:${episodeId}`;
+      const room = `comments:${animeId}:${episodeId}`;
       console.log(`🗑️ Deleting comment ${commentId} from ${room}`);
 
-      if (episodeRooms.has(room)) {
-        const roomData = episodeRooms.get(room);
-        roomData.comments = roomData.comments.filter(comment => comment.id !== commentId);
+      if (commentsData.has(room)) {
+        const comments = commentsData.get(room);
+        const updatedComments = comments.filter(comment => comment.id !== commentId);
+        commentsData.set(room, updatedComments);
 
         // Broadcast to everyone in the room
         io.to(room).emit('comment_deleted', commentId);
-        console.log(`📤 Broadcasted comment deletion to ${roomData.users.size} users in ${room}`);
+        console.log(`📤 Broadcasted comment deletion to room ${room}`);
       }
 
     } catch (error) {
       console.error('❌ Error deleting comment:', error);
       socket.emit('error', { message: 'Failed to delete comment' });
+    }
+  });
+
+  // Leave comments room
+  socket.on('leave_comments', ({ animeId, episodeId }) => {
+    const room = `comments:${animeId}:${episodeId}`;
+    
+    try {
+      socket.leave(room);
+      console.log(`👋 User ${socket.id} left comments ${room}`);
+
+    } catch (error) {
+      console.error('❌ Error leaving comments room:', error);
     }
   });
 
@@ -198,31 +206,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Leave episode room
-  socket.on('leave_episode', ({ animeId, episodeId }) => {
-    const room = `episode:${animeId}:${episodeId}`;
-    
-    try {
-      socket.leave(room);
-      
-      if (episodeRooms.has(room)) {
-        const roomData = episodeRooms.get(room);
-        roomData.users.delete(socket.id);
-        
-        // Clean up empty rooms
-        if (roomData.users.size === 0) {
-          episodeRooms.delete(room);
-          console.log(`🧹 Cleaned up empty room ${room}`);
-        }
-      }
-      
-      console.log(`👋 User ${socket.id} left ${room}`);
-
-    } catch (error) {
-      console.error('❌ Error leaving episode room:', error);
-    }
-  });
-
   // Leave chat room
   socket.on('leave_chat', ({ animeId, episodeId }) => {
     const room = `chat:${animeId}:${episodeId}`;
@@ -240,18 +223,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', (reason) => {
     console.log(`❌ User disconnected: ${socket.id} (${reason})`);
     
-    // Clean up user from all rooms
-    for (const [room, roomData] of episodeRooms.entries()) {
-      if (roomData.users.has(socket.id)) {
-        roomData.users.delete(socket.id);
-        
-        // Clean up empty rooms
-        if (roomData.users.size === 0) {
-          episodeRooms.delete(room);
-          console.log(`🧹 Cleaned up empty room ${room} after user disconnect`);
-        }
-      }
-    }
+    // No need to clean up comments rooms as they're shared between users
   });
 
   // Error handling
@@ -266,7 +238,7 @@ app.get('/health', (req, res) => {
     status: 'OK',
     timestamp: new Date().toISOString(),
     connectedClients: io.engine.clientsCount,
-    activeEpisodeRooms: episodeRooms.size,
+    activeCommentsRooms: commentsData.size,
     activeChatRooms: chatMessages.size,
     memoryUsage: process.memoryUsage()
   };
@@ -278,10 +250,9 @@ app.get('/health', (req, res) => {
 // Get server statistics
 app.get('/stats', (req, res) => {
   const stats = {
-    episodeRooms: Array.from(episodeRooms.entries()).map(([room, data]) => ({
+    commentsRooms: Array.from(commentsData.entries()).map(([room, comments]) => ({
       room,
-      userCount: data.users.size,
-      commentCount: data.comments.length
+      commentCount: comments.length
     })),
     chatRooms: Array.from(chatMessages.entries()).map(([room, messages]) => ({
       room,
