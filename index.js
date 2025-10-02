@@ -6,80 +6,54 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 
-// Middleware - Allow all origins for now
+// =======================
+// Middleware
+// =======================
 app.use(cors({
-  origin: "*",
+  origin: process.env.CLIENT_URL || "http://localhost:3000",
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json()); // This allows the server to parse JSON in request bodies
 
-// Socket.IO setup
-const io = socketIO(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  },
-  transports: ['websocket', 'polling']
-});
+// =======================
+// Essential API Routes
+// =======================
 
-// Store chat messages in memory
-const chatMessages = new Map();
-
-// ========== API ROUTES ==========
-
-// Root endpoint
+// 1. Root endpoint - Confirms the API is live :cite[10]
 app.get('/', (req, res) => {
   res.json({
-    message: 'Socket.IO Server is running!',
+    message: 'Anime API Server is running!',
     status: 'OK',
     timestamp: new Date().toISOString(),
     endpoints: [
-      '/health',
-      '/stats', 
-      '/api/test',
-      '/api/comments/test'
+      'GET    /',
+      'GET    /health',
+      'GET    /api/comments/test',
+      'POST   /api/comments',
+      'DELETE /api/comments/:id',
+      'GET    /api/stats'
     ]
   });
 });
 
-// Health check
+// 2. Health check endpoint for monitoring :cite[1]:cite[4]
 app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
-    server: 'Socket.IO API',
+    server: 'Anime-API',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    clients: io.engine?.clientsCount || 0
+    uptime: process.uptime()
   });
 });
 
-// Stats endpoint
-app.get('/stats', (req, res) => {
-  res.json({
-    status: 'Running',
-    chatRooms: chatMessages.size,
-    totalMessages: Array.from(chatMessages.values()).reduce((acc, msgs) => acc + msgs.length, 0),
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Test API endpoint
-app.get('/api/test', (req, res) => {
-  res.json({
-    message: 'API is working!',
-    endpoint: '/api/test',
-    method: 'GET',
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Test comments API
+// 3. Test endpoint for comments functionality
 app.get('/api/comments/test', (req, res) => {
   res.json({
-    message: 'Comments API is working!',
+    success: true,
+    message: 'Comments API is working correctly.',
     testComment: {
       id: 'test-' + Date.now(),
-      comment: 'This is a test comment from the API',
+      comment: 'This is a test comment from the live API',
       user: {
         username: 'TestUser',
         avatar: null,
@@ -92,159 +66,133 @@ app.get('/api/comments/test', (req, res) => {
   });
 });
 
-// POST endpoint for comments
+// 4. POST endpoint to create a new comment :cite[1]:cite[9]
 app.post('/api/comments', (req, res) => {
   const { animeId, episodeId, comment, userId } = req.body;
-  
-  res.json({
+
+  // Basic validation
+  if (!animeId || !episodeId || !comment) {
+    return res.status(400).json({ // Using correct 400 status for client errors :cite[4]
+      success: false,
+      error: 'MISSING_FIELDS',
+      message: 'animeId, episodeId, and comment are required fields.'
+    });
+  }
+
+  // Simulate successful comment creation
+  res.status(201).json({ // Using 201 for successful resource creation :cite[1]
     success: true,
-    message: 'Comment received (mock)',
+    message: 'Comment created successfully.',
     data: {
       id: 'comment-' + Date.now(),
       comment: comment,
       animeId: animeId,
       episodeId: episodeId,
-      userId: userId,
+      userId: userId || 'anonymous',
       createdAt: new Date().toISOString()
     }
   });
 });
 
-// ========== SOCKET.IO HANDLING ==========
+// 5. DELETE endpoint to remove a comment
+app.delete('/api/comments/:id', (req, res) => {
+  const commentId = req.params.id;
+
+  res.json({
+    success: true,
+    message: `Comment ${commentId} deleted successfully.`,
+    deletedId: commentId
+  });
+});
+
+// 6. Statistics endpoint
+app.get('/api/stats', (req, res) => {
+  res.json({
+    status: 'Operational',
+    serverTime: new Date().toISOString(),
+    features: ['REST API', 'Real-time Comments', 'WebSocket Support']
+  });
+});
+
+// =======================
+// Socket.IO for Real-time Features
+// =======================
+const io = socketIO(server, {
+  cors: {
+    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    methods: ["GET", "POST"]
+  }
+});
+
+// Store chat messages in memory (in production, use Redis)
+const chatMessages = new Map();
 
 io.on('connection', (socket) => {
   console.log('✅ User connected:', socket.id);
 
-  // When someone adds a comment
+  // Handle new comments via WebSockets
   socket.on('new_comment', (comment) => {
     try {
-      console.log('💬 New comment:', comment);
+      console.log('💬 Broadcasting new comment');
       // Broadcast to everyone EXCEPT the sender
       socket.broadcast.emit('new_comment', comment);
     } catch (error) {
-      console.error('❌ Error broadcasting comment:', error);
+      console.error('Error broadcasting comment:', error);
     }
   });
 
-  // When someone deletes a comment
   socket.on('comment_deleted', (data) => {
     try {
-      console.log('🗑️ Comment deleted:', data);
+      console.log('🗑️ Broadcasting deleted comment');
       socket.broadcast.emit('comment_deleted', data);
     } catch (error) {
-      console.error('❌ Error broadcasting deletion:', error);
+      console.error('Error broadcasting deletion:', error);
     }
   });
 
-  // Chat room functionality
-  socket.on('join_chat', ({ animeId, episodeId }) => {
-    const room = `chat:${animeId}:${episodeId}`;
-    socket.join(room);
-    console.log(`💬 User ${socket.id} joined ${room}`);
-    
-    if (!chatMessages.has(room)) {
-      chatMessages.set(room, []);
-    }
-  });
-
-  socket.on('send_message', (messageData) => {
-    try {
-      const room = `chat:${messageData.animeId}:${messageData.episodeId}`;
-      
-      if (!chatMessages.has(room)) {
-        chatMessages.set(room, []);
-      }
-
-      const messages = chatMessages.get(room);
-      const messageWithId = {
-        ...messageData,
-        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-        timestamp: new Date().toISOString()
-      };
-
-      messages.push(messageWithId);
-      
-      // Keep only last 100 messages
-      if (messages.length > 100) {
-        chatMessages.set(room, messages.slice(-100));
-      }
-
-      // Broadcast to room
-      io.to(room).emit('new_message', messageWithId);
-      console.log(`📤 Message sent to ${room}`);
-
-    } catch (error) {
-      console.error('❌ Error sending message:', error);
-    }
-  });
-
-  socket.on('get_chat_history', ({ animeId, episodeId }, callback) => {
-    const room = `chat:${animeId}:${episodeId}`;
-    const messages = chatMessages.get(room) || [];
-    
-    if (typeof callback === 'function') {
-      callback(messages);
-    }
-  });
-
-  socket.on('leave_chat', ({ animeId, episodeId }) => {
-    const room = `chat:${animeId}:${episodeId}`;
-    socket.leave(room);
-    console.log(`👋 User ${socket.id} left ${room}`);
-  });
-
-  socket.on('disconnect', (reason) => {
-    console.log(`❌ User disconnected: ${socket.id} (${reason})`);
+  socket.on('disconnect', () => {
+    console.log(`❌ User disconnected: ${socket.id}`);
   });
 });
 
-// Handle 404
+// =======================
+// Error Handling & 404
+// =======================
+
+// Handle 404 for all other routes - THIS MUST BE LAST :cite[3]
 app.use('*', (req, res) => {
-  res.status(404).json({ 
-    error: 'Route not found',
-    availableRoutes: [
-      'GET /',
-      'GET /health', 
-      'GET /stats',
-      'GET /api/test',
-      'GET /api/comments/test',
-      'POST /api/comments'
+  res.status(404).json({
+    success: false,
+    error: 'ENDPOINT_NOT_FOUND',
+    message: `Route ${req.originalUrl} not found on this server.`,
+    availableEndpoints: [
+      '/',
+      '/health',
+      '/api/comments/test',
+      '/api/comments',
+      '/api/stats'
     ]
   });
 });
 
-// Error handling
+// Global error handler
 app.use((error, req, res, next) => {
   console.error('🔴 Server error:', error);
-  res.status(500).json({ error: 'Internal server error' });
+  res.status(500).json({
+    success: false,
+    error: 'INTERNAL_SERVER_ERROR',
+    message: 'Something went wrong on the server.'
+  });
 });
 
+// =======================
+// Start Server
+// =======================
 const PORT = process.env.PORT || 3001;
 
 server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📍 API Endpoints:`);
-  console.log(`   http://localhost:${PORT}/`);
-  console.log(`   http://localhost:${PORT}/health`);
-  console.log(`   http://localhost:${PORT}/stats`);
-  console.log(`   http://localhost:${PORT}/api/test`);
-  console.log(`   http://localhost:${PORT}/api/comments/test`);
-  console.log(`🔌 Socket.IO: ws://localhost:${PORT}`);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('🛑 Shutting down gracefully...');
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('🛑 Shutting down gracefully...');
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
+  console.log(`🚀 API Server running on port ${PORT}`);
+  console.log(`📍 Base URL: http://localhost:${PORT}`);
+  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
+  console.log(`📝 Test comments: http://localhost:${PORT}/api/comments/test`);
 });
