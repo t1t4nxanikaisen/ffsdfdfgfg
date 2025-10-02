@@ -9,23 +9,21 @@ const server = http.createServer(app);
 // Get allowed origins from environment or use defaults
 const allowedOrigins = process.env.CLIENT_URL 
   ? process.env.CLIENT_URL.split(',') 
-  : ["http://localhost:3000", "https://your-anime-site.vercel.app"];
+  : [
+      "http://localhost:3000", 
+      "https://anime-website.vercel.app",
+      "https://*.vercel.app"
+    ];
 
 // Middleware
 app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
-    }
-    return callback(null, true);
-  },
+  origin: allowedOrigins,
   credentials: true
 }));
 app.use(express.json());
+
+// Serve static files if needed
+app.use(express.static('public'));
 
 // Socket.IO setup
 const io = socketIO(server, {
@@ -34,12 +32,74 @@ const io = socketIO(server, {
     methods: ["GET", "POST"],
     credentials: true
   },
-  transports: ['websocket', 'polling'] // Important for Vercel
+  transports: ['websocket', 'polling']
 });
 
-// Store chat messages in memory (use Redis in production)
+// Store chat messages in memory
 const chatMessages = new Map();
 
+// API Routes - These make it work like a real API
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Socket.IO Server is running!',
+    endpoints: {
+      health: '/health',
+      stats: '/stats',
+      socket: '/socket.io (WebSocket)'
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  const healthData = {
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    connectedClients: io.engine?.clientsCount || 0,
+    activeChatRooms: chatMessages.size,
+    uptime: process.uptime(),
+    memory: process.memoryUsage()
+  };
+  
+  console.log('🏥 Health check requested');
+  res.json(healthData);
+});
+
+// Statistics endpoint
+app.get('/stats', (req, res) => {
+  const stats = {
+    status: 'Server is running',
+    timestamp: new Date().toISOString(),
+    chatRooms: Array.from(chatMessages.entries()).map(([room, messages]) => ({
+      room,
+      messageCount: messages.length,
+      lastActivity: messages.length > 0 ? messages[messages.length - 1].timestamp : 'No activity'
+    })),
+    totalMessages: Array.from(chatMessages.values()).reduce((acc, messages) => acc + messages.length, 0)
+  };
+  
+  res.json(stats);
+});
+
+// Test comments endpoint (for debugging)
+app.get('/api/test-comments', (req, res) => {
+  res.json({
+    message: 'Comments API is working!',
+    testComment: {
+      id: 'test-123',
+      comment: 'This is a test comment from the API',
+      user: {
+        username: 'TestUser',
+        avatar: null,
+        isAdmin: false
+      },
+      createdAt: new Date().toISOString()
+    }
+  });
+});
+
+// Socket.IO Connection Handling
 io.on('connection', (socket) => {
   console.log('✅ User connected:', socket.id);
 
@@ -50,7 +110,7 @@ io.on('connection', (socket) => {
       
       // Broadcast to everyone EXCEPT the sender
       socket.broadcast.emit('new_comment', comment);
-      console.log(`📤 Broadcasted comment to other users`);
+      console.log('📤 Broadcasted comment to other users');
 
     } catch (error) {
       console.error('❌ Error broadcasting new comment:', error);
@@ -61,11 +121,11 @@ io.on('connection', (socket) => {
   // When someone deletes a comment (broadcast to other users)
   socket.on('comment_deleted', (data) => {
     try {
-      console.log(`🗑️ Broadcasting deleted comment to other users:`, data);
+      console.log('🗑️ Broadcasting deleted comment to other users:', data);
       
       // Broadcast to everyone EXCEPT the sender
       socket.broadcast.emit('comment_deleted', data);
-      console.log(`📤 Broadcasted comment deletion to other users`);
+      console.log('📤 Broadcasted comment deletion to other users');
 
     } catch (error) {
       console.error('❌ Error broadcasting deleted comment:', error);
@@ -173,35 +233,17 @@ io.on('connection', (socket) => {
   });
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  const healthData = {
-    status: 'OK',
-    timestamp: new Date().toISOString(),
-    connectedClients: io.engine.clientsCount,
-    activeChatRooms: chatMessages.size,
-    uptime: process.uptime()
-  };
-  
-  console.log('🏥 Health check:', healthData);
-  res.json(healthData);
-});
-
-// Get server statistics
-app.get('/stats', (req, res) => {
-  const stats = {
-    chatRooms: Array.from(chatMessages.entries()).map(([room, messages]) => ({
-      room,
-      messageCount: messages.length
-    }))
-  };
-  
-  res.json(stats);
-});
-
-// Handle 404
+// Handle 404 - Keep this last
 app.use('*', (req, res) => {
-  res.status(404).json({ error: 'Route not found' });
+  res.status(404).json({ 
+    error: 'Route not found',
+    availableEndpoints: {
+      root: '/',
+      health: '/health',
+      stats: '/stats',
+      test: '/api/test-comments'
+    }
+  });
 });
 
 // Error handling middleware
@@ -215,5 +257,24 @@ const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`🚀 Socket.IO server running on port ${PORT}`);
   console.log(`🌐 Allowed origins:`, allowedOrigins);
-  console.log(`🏥 Health check available at: http://localhost:${PORT}/health`);
+  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
+  console.log(`📊 Stats: http://localhost:${PORT}/stats`);
+  console.log(`🔌 Socket endpoint: /socket.io`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('🛑 SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
 });
